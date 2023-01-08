@@ -48,15 +48,22 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
         IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
         totalDeposit += _amount;
-        uint256 tokensToMint = _amount / getLendExchangeRate();
-        _mint(msg.sender, _amount);
+
+        uint256 tokensToMint = _amount.mulDiv(
+            10 ** decimals,
+            getLendExchangeRate()
+        );
+
+        _mint(msg.sender, tokensToMint);
     }
 
     function redeem(uint256 _amount) external {
-        require(_amount <= balanceOf(msg.sender), "Not enough tokens");
         accrueInterest();
 
-        uint256 underlyingToReceive = _amount * getLendExchangeRate();
+        uint256 underlyingToReceive = _amount.mulDiv(
+            getLendExchangeRate(),
+            10 ** decimals
+        );
         totalDeposit -= underlyingToReceive;
 
         burnFrom(msg.sender, _amount);
@@ -65,8 +72,8 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function addCollateral() external payable nonReentrant {
         require(msg.value != 0, "can't send 0 eth");
-
         accrueInterest();
+
         usersCollateral[msg.sender] += msg.value;
     }
 
@@ -74,12 +81,12 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function removeCollateral(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't withdraw 0 eth");
+        accrueInterest();
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
         require(
             excess >= _amount * oracleprice,
             "not enough collateral available!"
         );
-        accrueInterest();
 
         usersCollateral[msg.sender] -= _amount;
         (bool success, ) = msg.sender.call{value: _amount}("");
@@ -91,7 +98,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
         require(excess >= _amount, "not enough collateral available!");
 
-        uint256 borrowedTokens = _amount * getDebtExchangeRate();
+        uint256 borrowedTokens = _amount.mulDiv(
+            getDebtExchangeRate(),
+            10 ** decimals
+        );
         usersBorrowed[msg.sender] += borrowedTokens;
         totalBorrowed += borrowedTokens;
         totalDebt += _amount;
@@ -102,7 +112,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function repay(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't repay 0 tokens!");
-        uint256 borrowToRepay = _amount * getDebtExchangeRate();
+        uint256 borrowToRepay = _amount.mulDiv(
+            getDebtExchangeRate(),
+            10 ** decimals
+        );
         require(
             borrowToRepay <= usersBorrowed[msg.sender],
             "can't repay more than owed debt!"

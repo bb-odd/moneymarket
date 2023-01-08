@@ -6,17 +6,17 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract Pool is ERC20Burnable, Ownable {
+contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
     uint256 public totalDeposit;
     uint256 public totalBorrowed;
-    uint256 public totalCollateral;
     uint256 public totalDebt;
     uint256 public totalReserve;
-    uint256 public ltv;
+    uint256 public ltv; // 1 = 10%
     address public immutable underlying;
     mapping(address => uint256) usersCollateral;
     // this will store how much a user has borrowed not in underlying tokens but similar to how lenders receive pool tokens
@@ -26,53 +26,110 @@ contract Pool is ERC20Burnable, Ownable {
     constructor(
         address _underlying,
         string memory _name,
-        string memory _symbol
+        string memory _symbol,
+        uint256 _ltv
     ) ERC20(_name, _symbol) {
         underlying = _underlying;
+        ltv = _ltv;
     }
 
-    // exchangeRate = cash + totalBorrowed - reserve / totalSupply
-    // we minus reserve as that is kept for the protocol governance
-    function getLendExchangeRate() public returns(uint256){
-        uint256 totalSupply = _totalSupply;
-        if(totalSupply == 0){
-            return 10**18;
-        }
-
-        return (getCash() + totalBorrowed - totalReserve).mulDiv(10**18,totalSupply());
+    // ADMIN FUNCTIONS
+    function setLTV(uint256 _ltv) external onlyOwner {
+        ltv = _ltv;
     }
 
-    // exchangeRate = totalBorrowed / totalDebt (debt accrues interest while borrowed is the amount of "pool tokens" borrowed)
-    function getDebtExchangeRate() public returns(uint256){
-        return totalDebt.mulDiv(10**18, totalBorrowed);
-    }
+    // USER FUNCTIONS
 
-    function getCash() public view returns(uint256){
-        IERC20 token = IERC20(underlying);
-        return token.balanceOf(address(this));
-    } 
+    // updates totalDebt with interest accrued since last block this function was called
+    function accrueInterest() public {}
 
     function supply(uint256 _amount) external {
+        accrueInterest();
         IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
         totalDeposit += _amount;
-        uint256 tokensToMint = _amount / getExchangeRate(); 
+        uint256 tokensToMint = _amount / getLendExchangeRate();
         _mint(msg.sender, _amount);
     }
 
     function redeem(uint256 _amount) external {
         require(_amount <= balanceOf(msg.sender), "Not enough tokens");
-        uint256 underlyingToReceive;
+        accrueInterest();
+        uint256 underlyingToReceive = _amount * getLendExchangeRate();
+        totalDeposit -= underlyingToReceive;
+        burnFrom(msg.sender, _amount);
+        IERC20(underlying).safeTransfer(msg.sender, _amount);
     }
 
-    function addCollateral() external payable {}
+    function addCollateral() external payable nonReentrant {
+        require(msg.value != 0, "can't send 0 eth");
 
-    function removeCollateral() external {}
+        accrueInterest();
+        usersCollateral[msg.sender] += msg.value;
+    }
 
-    function borrow() external {}
+    // remember that we need to use debtExchangeRate when checking liquidity as the borrows need to be converted to underlying debt that includes accrued interest
 
-    function repay() external {}
+    function removeCollateral(uint256 _amount) external nonReentrant {
+        require(_amount != 0, "can't withdraw 0 eth");
 
-    function getUtilizationRatio() public view returns(uint256){
-        return total
+        accrueInterest();
+        // check account liquidity, if they have borrows that exceed invariant of (collat - _amount) * ltv >= borrows
+    }
+
+    function borrow(uint256 _amount) external nonReentrant {
+        // check account liquidity, if they have borrows that exceed invariant of collat * ltv >= borrows + amount
+    }
+
+    function repay() external nonReentrant {}
+
+    function getLiquidity(address _account) public returns (uint256, uint256) {
+        uint256 debt = usersBorrowed[_account].mulDiv(
+            10 ** decimals,
+            getDebtExchangeRate()
+        );
+        uint256 collateral = (usersCollateral(_account) * ltv) / 10; // * oracle price
+
+        uint256 excess = 0;
+        uint256 shortfall = 0;
+
+        if (collateral >= debt) {
+            excess = collateral - debt;
+        } else {
+            shortfall = debt - collateral;
+        }
+        return (excess, shortfall);
+    }
+
+    function getUtilizationRatio() public view returns (uint256) {
+        return total;
+    }
+
+    // exchangeRate = cash + totalBorrowed - reserve / totalSupply
+    // we minus reserve as that is kept for the protocol governance
+    function getLendExchangeRate() public view returns (uint256) {
+        uint256 _totalSupply = totalSupply;
+        if (_totalSupply == 0) {
+            return 10 ** decimals;
+        }
+
+        return
+            (getCash() + totalBorrowed - totalReserve).mulDiv(
+                10 ** decimals,
+                _totalSupply
+            );
+    }
+
+    // exchangeRate = totalDebt/ totalBorrowed (debt accrues interest while borrowed is the amount of "pool tokens" borrowed)
+    function getDebtExchangeRate() public view returns (uint256) {
+        uint256 _totalBorrowed = totalBorrowed;
+        if (_totalBorrowed == 0) {
+            return 10 ** decimals;
+        }
+        return totalDebt.mulDiv(10 ** decimals, _totalBorrowed);
+    }
+
+    function getCash() public view returns (uint256) {
+        IERC20 token = IERC20(underlying);
+        return token.balanceOf(address(this));
     }
 }

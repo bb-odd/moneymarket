@@ -87,19 +87,34 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     }
 
     function borrow(uint256 _amount) external nonReentrant {
-        // check account liquidity, if they have borrows that exceed invariant of collat * ltv >= borrows + amount
         require(_amount != 0, "can't borrow 0 tokens");
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
         require(excess >= _amount, "not enough collateral available!");
 
-        usersBorrowed[msg.sender] += _amount * getDebtExchangeRate();
-        totalBorrowed += _amount;
+        uint256 borrowedTokens = _amount * getDebtExchangeRate();
+        usersBorrowed[msg.sender] += borrowedTokens;
+        totalBorrowed += borrowedTokens;
+        totalDebt += _amount;
 
         IERC20 token = IERC20(underlying);
         token.safeTransfer(msg.sender, _amount);
     }
 
-    function repay() external nonReentrant {}
+    function repay(uint256 _amount) external nonReentrant {
+        require(_amount != 0, "can't repay 0 tokens!");
+        uint256 borrowToRepay = _amount * getDebtExchangeRate();
+        require(
+            borrowToRepay <= usersBorrowed[msg.sender],
+            "can't repay more than owed debt!"
+        );
+
+        IERC20 token = IERC20(underlying);
+        underlying.safeTransferFrom(msg.sender, address(this), _amount);
+
+        usersBorrowed[msg.sender] -= borrowToRepay;
+        totalBorrowed -= borrowToRepay;
+        totalDebt -= _amount;
+    }
 
     function getLiquidity(address _account) public returns (uint256, uint256) {
         uint256 debt = usersBorrowed[_account].mulDiv(
@@ -134,13 +149,13 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
             );
     }
 
-    // exchangeRate = totalDebt/ totalBorrowed (debt accrues interest while borrowed is the amount of "pool tokens" borrowed)
+    // exchangeRate = totalBorrowed/ totalDebt (debt accrues interest while borrowed is the amount of "pool tokens" borrowed)
     function getDebtExchangeRate() public view returns (uint256) {
         uint256 _totalBorrowed = totalBorrowed;
         if (_totalBorrowed == 0) {
             return 10 ** decimals;
         }
-        return totalDebt.mulDiv(10 ** decimals, _totalBorrowed);
+        return _totalBorrowed.mulDiv(10 ** decimals, totalDebt);
     }
 
     function getCash() public view returns (uint256) {

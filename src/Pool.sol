@@ -45,6 +45,7 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function supply(uint256 _amount) external {
         accrueInterest();
+
         IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
         totalDeposit += _amount;
         uint256 tokensToMint = _amount / getLendExchangeRate();
@@ -54,8 +55,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     function redeem(uint256 _amount) external {
         require(_amount <= balanceOf(msg.sender), "Not enough tokens");
         accrueInterest();
+
         uint256 underlyingToReceive = _amount * getLendExchangeRate();
         totalDeposit -= underlyingToReceive;
+
         burnFrom(msg.sender, _amount);
         IERC20(underlying).safeTransfer(msg.sender, _amount);
     }
@@ -71,13 +74,29 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function removeCollateral(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't withdraw 0 eth");
-
+        (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
+        require(
+            excess >= _amount * oracleprice,
+            "not enough collateral available!"
+        );
         accrueInterest();
-        // check account liquidity, if they have borrows that exceed invariant of (collat - _amount) * ltv >= borrows
+
+        usersCollateral[msg.sender] -= _amount;
+        (bool success, ) = msg.sender.call{value: _amount}("");
+        require(success, "eth transfer failed");
     }
 
     function borrow(uint256 _amount) external nonReentrant {
         // check account liquidity, if they have borrows that exceed invariant of collat * ltv >= borrows + amount
+        require(_amount != 0, "can't borrow 0 tokens");
+        (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
+        require(excess >= _amount, "not enough collateral available!");
+
+        usersBorrowed[msg.sender] += _amount * getDebtExchangeRate();
+        totalBorrowed += _amount;
+
+        IERC20 token = IERC20(underlying);
+        token.safeTransfer(msg.sender, _amount);
     }
 
     function repay() external nonReentrant {}
@@ -87,8 +106,8 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
             10 ** decimals,
             getDebtExchangeRate()
         );
-        uint256 collateral = (usersCollateral(_account) * ltv) / 10; // * oracle price
 
+        uint256 collateral = (usersCollateral(_account) * ltv) / 10; // * oracle price
         uint256 excess = 0;
         uint256 shortfall = 0;
 
@@ -98,10 +117,6 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
             shortfall = debt - collateral;
         }
         return (excess, shortfall);
-    }
-
-    function getUtilizationRatio() public view returns (uint256) {
-        return total;
     }
 
     // exchangeRate = cash + totalBorrowed - reserve / totalSupply

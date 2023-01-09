@@ -13,7 +13,13 @@ contract PoolTest is Test {
     ERC20 daiToken;
 
     function setUp() public {
-        pool = new Pool(dai, "Pool Dai", "pDai", 4);
+        pool = new Pool(
+            dai,
+            "Pool Dai",
+            "pDai",
+            4,
+            0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9
+        );
         daiToken = ERC20(dai);
     }
 

@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "./interfaces/AggregatorV3Interface.sol";
 
 contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -18,6 +19,9 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     uint256 public totalReserve;
     uint256 public ltv; // 1 = 10%
     address public immutable underlying;
+    address public underlyingPriceFeed;
+    address constant ethPriceFeed = 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419;
+
     mapping(address => uint256) public usersCollateral;
     // this will store how much a user has borrowed not in underlying tokens but similar to how lenders receive pool tokens
     // underlying debt can be calculated using exchange rate and totalBorrowed
@@ -27,10 +31,12 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         address _underlying,
         string memory _name,
         string memory _symbol,
-        uint256 _ltv
+        uint256 _ltv,
+        address _aggregatorV3
     ) ERC20(_name, _symbol) {
         underlying = _underlying;
         ltv = _ltv;
+        underlyingPriceFeed = _aggregatorV3;
     }
 
     // ADMIN FUNCTIONS
@@ -84,12 +90,13 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         require(_amount <= usersCollateral[msg.sender]);
         accrueInterest();
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
-        /*
+
+        uint ethPrice = getEthPrice();
+
         require(
-            excess >= _amount * oracleprice,
+            excess >= _amount.mulDiv(uint(ethPrice), 10 ** 18),
             "not enough collateral available!"
         );
-        */
 
         usersCollateral[msg.sender] -= _amount;
         (bool success, ) = (msg.sender).call{value: _amount}("");
@@ -99,12 +106,19 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     function borrow(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't borrow 0 tokens");
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
-        require(excess >= _amount, "not enough collateral available!");
+
+        uint underlyingPrice = getUnderlyingPrice();
+
+        require(
+            excess >= _amount.mulDiv(uint(underlyingPrice), 10 ** decimals()),
+            "not enough collateral available!"
+        );
 
         uint256 borrowedTokens = _amount.mulDiv(
             getDebtExchangeRate(),
             10 ** decimals()
         );
+
         usersBorrowed[msg.sender] += borrowedTokens;
         totalBorrowed += borrowedTokens;
         totalDebt += _amount;
@@ -132,23 +146,31 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         totalDebt -= _amount;
     }
 
+    // return excess and shortfall in usd terms
+    // at least one of excess or shortfall will be 0
     function getLiquidity(
         address _account
     ) public view returns (uint256, uint256) {
-        uint256 debt = usersBorrowed[_account].mulDiv(
-            10 ** decimals(),
-            getDebtExchangeRate()
-        );
+        uint ethPrice = getEthPrice();
+        uint underlyingPrice = getUnderlyingPrice();
 
-        uint256 collateral = (usersCollateral[_account] * ltv) /
-            (10 * 10 ** 18); // * oracle price
+        uint256 debtUsd = (
+            usersBorrowed[_account].mulDiv(
+                10 ** decimals(),
+                getDebtExchangeRate()
+            )
+        ).mulDiv(underlyingPrice, 10 ** decimals());
+
+        uint256 collateralUsd = (usersCollateral[_account].mulDiv(ltv, 10))
+            .mulDiv(ethPrice, 10 ** 18);
+
         uint256 excess = 0;
         uint256 shortfall = 0;
 
-        if (collateral >= debt) {
-            excess = collateral - debt;
+        if (collateralUsd >= debtUsd) {
+            excess = collateralUsd - debtUsd;
         } else {
-            shortfall = debt - collateral;
+            shortfall = debtUsd - collateralUsd;
         }
         return (excess, shortfall);
     }
@@ -188,5 +210,25 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function getUserBorrow(address _account) public view returns (uint256) {
         return usersBorrowed[_account];
+    }
+
+    function getUnderlyingPrice() internal view returns (uint) {
+        AggregatorV3Interface UnderlyingPriceFeed = AggregatorV3Interface(
+            underlyingPriceFeed
+        );
+
+        (, int underlyingPrice, , , ) = UnderlyingPriceFeed.latestRoundData();
+
+        return uint(underlyingPrice);
+    }
+
+    function getEthPrice() internal view returns (uint) {
+        AggregatorV3Interface EthPriceFeed = AggregatorV3Interface(
+            ethPriceFeed
+        );
+
+        (, int ethPrice, , , ) = EthPriceFeed.latestRoundData();
+
+        return uint(ethPrice);
     }
 }

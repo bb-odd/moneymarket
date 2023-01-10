@@ -79,11 +79,6 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         uint256 debtPrior = totalDebt;
         uint256 reservesPrior = totalReserve;
 
-        // time passed since last function call in seconds
-        if (accrualBlockTimestampPrior >= currentBlockTimestamp) {
-            return;
-        }
-
         uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestampPrior;
 
         uint256 totalDebtNew;
@@ -123,13 +118,20 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     }
 
     function redeem(uint256 _amount) external {
+        require(balanceOf(msg.sender) >= _amount);
         accrueInterest();
 
         uint256 underlyingToReceive = _amount.mulDiv(
             getLendExchangeRate(),
             10 ** decimals()
         );
-        totalDeposited -= underlyingToReceive;
+
+        // this is needed due to small discrepencies after debt calculations are done
+        if (underlyingToReceive > totalDeposited) {
+            totalDeposited = 0;
+        } else {
+            totalDeposited -= underlyingToReceive;
+        }
 
         burn(_amount);
         IERC20(underlying).safeTransfer(msg.sender, underlyingToReceive);
@@ -269,11 +271,7 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         if (_totalBorrowed == 0) {
             return 10 ** decimals();
         }
-        /*
-        console.log("---------liquidity check---------");
-        console.log(_totalBorrowed);
-        console.log(totalDebt);
-        */
+
         return _totalBorrowed.mulDiv(10 ** decimals(), totalDebt);
     }
 

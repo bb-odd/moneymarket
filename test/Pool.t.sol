@@ -159,11 +159,43 @@ contract PoolTest is Test {
     }
 
     // test yearly interest should be around 12%
-    // have 1 more person borrow and both borrow max dai possible
+    function testCheckCorrectInterestRate() public {
+        enterPool(10000 * 1e18);
 
-    // test exchange rates after users lend and borrow
+        pool.addCollateral{value: 1 * 10 ** 18}();
+        pool.borrow(500 * 1e18);
+        vm.startPrank(address(2));
+        pool.borrow(500 * 1e18);
+        vm.stopPrank();
 
-    // test exchange rates after users lend and borrow and interest is accrued
+        vm.warp(block.timestamp + 365 days);
+        pool.accrueInterest();
+        require(pool.getTotalDebt() > 1150 * 1e18);
+    }
+
+    // test that redeeming tokens returns a greater amount of dai than initial after interest has accrued
+    // test that when borrows are repaid and all lenders withdraw, exchange rates are 1e18
+    // also checks that there is still money left in pool as reserves
+    function testTokenRedeem() public {
+        enterPool(10000 * 1e18);
+
+        vm.startPrank(address(2));
+        pool.borrow(1000 * 1e18);
+        vm.warp(block.timestamp + 365 days);
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.repay(1000 * 1e18);
+        vm.stopPrank();
+
+        vm.startPrank(address(1));
+        pool.redeem(1000 * 1e18);
+        vm.stopPrank();
+
+        assertEq(pool.getDebtExchangeRate(), 1e18);
+        assertEq(pool.getLendExchangeRate(), 1e18);
+        require(daiToken.balanceOf(address(pool)) > 4 * 1e18);
+        require(pool.getReserves() > 0);
+        require(daiToken.balanceOf(address(1)) > 10000 * 1e18);
+    }
 
     // test interest accrued ( 1 lender 1 borrower) (multiple lenders / borrowers)
 

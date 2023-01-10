@@ -13,13 +13,18 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using Math for uint256;
 
-    uint256 public totalDeposit;
+    uint256 public totalDeposited;
     uint256 public totalBorrowed;
     uint256 public totalDebt;
     uint256 public totalReserve;
     uint256 public ltv; // 1 = 10%
+    uint256 public multiplierPerTimestamp;
+    uint256 public baseRatePerTimestamp;
+    uint256 accrualBlockTimestamp;
+    uint256 reserveFactor;
     address public immutable underlying;
     address public underlyingPriceFeed;
+    uint256 public constant timestampsPerYear = 31536000;
     address constant ethPriceFeed = 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419;
 
     mapping(address => uint256) public usersCollateral;
@@ -32,11 +37,25 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         string memory _name,
         string memory _symbol,
         uint256 _ltv,
-        address _aggregatorV3
+        address _aggregatorV3,
+        uint256 _multiplierPerYear,
+        uint256 _baseRatePerYear,
+        uint256 _reserveFactor
     ) ERC20(_name, _symbol) {
         underlying = _underlying;
         ltv = _ltv;
         underlyingPriceFeed = _aggregatorV3;
+
+        multiplierPerTimestamp =
+            ((_multiplierPerYear * 1e18) / timestampsPerYear) /
+            1e18;
+
+        baseRatePerTimestamp =
+            ((_baseRatePerYear * 1e18) / timestampsPerYear) /
+            1e18;
+
+        accrualBlockTimestamp = block.timestamp;
+        reserveFactor = _reserveFactor;
     }
 
     // ADMIN FUNCTIONS
@@ -47,13 +66,49 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     // USER FUNCTIONS
 
     // updates totalDebt with interest accrued since last block this function was called
-    function accrueInterest() public {}
+    function accrueInterest() public {
+        // borrowRate = baseRate + (Utilization * multiplier)
+        uint256 borrowRate = (
+            getUtilizationRatio().mulDiv(multiplierPerTimestamp, 1e18)
+        ) + baseRatePerTimestamp;
+
+        uint256 currentBlockTimestamp = block.timestamp;
+        uint256 accrualBlockTimestampPrior = accrualBlockTimestamp;
+
+        uint256 borrowsPrior = totalBorrowed;
+        uint256 reservesPrior = totalReserve;
+
+        // time passed since last function call in seconds
+        uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestamp;
+
+        uint256 totalBorrowsNew;
+        uint256 totalReservesNew;
+        /*
+         * Calculate the interest accumulated into borrows and reserves and the new index:
+         *  simpleInterestFactor = borrowRate * blockDelta
+         *  interestAccumulated = simpleInterestFactor * totalBorrows
+         *  totalBorrowsNew = interestAccumulated + totalBorrows
+         *  totalReservesNew = interestAccumulated * reserveFactor + totalReserves
+         *  borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
+         */
+        uint256 interestFactor = borrowRate * blockDelta;
+
+        uint256 interestAccumulated = interestFactor.mulDiv(borrowsPrior, 1e18);
+
+        totalBorrowsNew = interestAccumulated + borrowsPrior;
+        totalReservesNew =
+            (interestAccumulated.mulDiv(reserveFactor, 1e18)) +
+            reservesPrior;
+
+        totalBorrowed = totalBorrowsNew;
+        totalReserve = totalReservesNew;
+    }
 
     function supply(uint256 _amount) external {
         accrueInterest();
 
         IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
-        totalDeposit += _amount;
+        totalDeposited += _amount;
 
         uint256 tokensToMint = _amount.mulDiv(
             10 ** decimals(),
@@ -70,7 +125,7 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
             getLendExchangeRate(),
             10 ** decimals()
         );
-        totalDeposit -= underlyingToReceive;
+        totalDeposited -= underlyingToReceive;
 
         burn(_amount);
         IERC20(underlying).safeTransfer(msg.sender, underlyingToReceive);
@@ -93,10 +148,12 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
         uint ethPrice = getEthPrice();
 
-        require(
-            excess >= _amount.mulDiv(uint(ethPrice), 10 ** 18),
-            "not enough collateral available!"
-        );
+        if (usersBorrowed[msg.sender] > 0) {
+            require(
+                excess >= _amount.mulDiv(uint(ethPrice), 10 ** 18),
+                "not enough collateral available!"
+            );
+        }
 
         usersCollateral[msg.sender] -= _amount;
         (bool success, ) = (msg.sender).call{value: _amount}("");
@@ -210,6 +267,18 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function getUserBorrow(address _account) public view returns (uint256) {
         return usersBorrowed[_account];
+    }
+
+    function getUtilizationRatio() public view returns (uint256) {
+        uint256 borrows = totalBorrowed;
+        if (borrows == 0) {
+            return 0;
+        }
+
+        // scale it to 1e18 no matter the decimals of underlying
+        return
+            ((totalBorrowed.mulDiv(10 ** decimals(), totalDeposited)) -
+                totalReserve) * (10 ** (18 - decimals()));
     }
 
     function getUnderlyingPrice() internal view returns (uint) {

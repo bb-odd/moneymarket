@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/AggregatorV3Interface.sol";
+import "forge-std/console.sol";
 
 contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -281,23 +282,34 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
                 totalReserve) * (10 ** (18 - decimals()));
     }
 
+    // get underlying price scaled to 1e18
     function getUnderlyingPrice() internal view returns (uint) {
         AggregatorV3Interface UnderlyingPriceFeed = AggregatorV3Interface(
             underlyingPriceFeed
         );
 
-        (, int underlyingPrice, , , ) = UnderlyingPriceFeed.latestRoundData();
+        (, int256 underlyingPrice, , , ) = UnderlyingPriceFeed
+            .latestRoundData();
 
-        return uint(underlyingPrice);
+        return
+            uint256(underlyingPrice).mulDiv(
+                10 ** decimals(),
+                10 ** UnderlyingPriceFeed.decimals()
+            );
     }
 
+    // get eth price scaled to 1e18
     function getEthPrice() internal view returns (uint) {
         AggregatorV3Interface EthPriceFeed = AggregatorV3Interface(
             ethPriceFeed
         );
 
-        (, int ethPrice, , , ) = EthPriceFeed.latestRoundData();
+        (, int256 ethPrice, , , ) = EthPriceFeed.latestRoundData();
 
-        return uint(ethPrice);
+        return
+            uint256(ethPrice).mulDiv(
+                10 ** decimals(),
+                10 ** EthPriceFeed.decimals()
+            );
     }
 }

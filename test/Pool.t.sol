@@ -17,15 +17,33 @@ contract PoolTest is Test {
             dai,
             "Pool Dai",
             "pDai",
-            4,
-            0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9
+            8,
+            0xAed0c38402a5d19df6E4c03F4E2DceD6e29c1ee9,
+            12e16,
+            4e16,
+            5e16
         );
         daiToken = ERC20(dai);
+    }
+
+    // helper function that adds 1 lender and 1 borrower to the pool
+    function enterPool() public {
+        getDai(binance, 1000 * 10 ** 18);
+
+        vm.startPrank(address(1));
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.supply(1000 * 10 ** 18);
+        vm.stopPrank();
+
+        vm.startPrank(address(2));
+        pool.addCollateral{value: 1 * 10 ** 18}();
+        vm.stopPrank();
     }
 
     function getDai(address _holder, uint256 _amount) public {
         vm.startPrank(_holder);
         daiToken.transferFrom(_holder, address(this), _amount);
+        daiToken.transferFrom(_holder, address(1), _amount);
         vm.stopPrank();
     }
 
@@ -55,6 +73,18 @@ contract PoolTest is Test {
     }
 
     // test get liquidity function
+    // should return excess >= 0 when user is not in violation of borrow allowance (collateral * ltv >= borrows)
+    // should return shortfall >= 0 when user has exceeded borrow allowance (collateral * ltv <= borrows)
+    function testGetLiquidity() public {
+        enterPool();
+        vm.startPrank(address(2));
+        pool.borrow(600 * 10 ** 18);
+        (uint256 excess, uint256 shortfall) = pool.getLiquidity(address(2));
+        require(excess > 0 && shortfall == 0, "wrong liquidity calculation");
+        //console.log(excess);
+        //console.log(shortfall);
+        vm.stopPrank();
+    }
 
     // test revert of remove collateral function if amount to borrow exceeds liquidity of account
 

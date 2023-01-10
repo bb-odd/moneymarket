@@ -44,6 +44,7 @@ contract PoolTest is Test {
         vm.startPrank(_holder);
         daiToken.transferFrom(_holder, address(this), _amount);
         daiToken.transferFrom(_holder, address(1), _amount);
+        daiToken.transferFrom(_holder, address(2), _amount);
         vm.stopPrank();
     }
 
@@ -89,7 +90,7 @@ contract PoolTest is Test {
         vm.stopPrank();
     }
 
-    // tests getLiquidity() revert when user doesn't have enough collateral available to borrow
+    // tests borrow() reverts when user doesn't have enough collateral available to borrow
     function testRevertGetLiquidity() public {
         enterPool(10000 * 1e18);
         vm.startPrank(address(2));
@@ -98,13 +99,67 @@ contract PoolTest is Test {
         vm.stopPrank();
     }
 
-    // test revert of remove collateral function if amount to borrow exceeds liquidity of account
-
-    // test reserves are going up
-
-    // test reserves aren't included when redeeming pool tokens
+    // test removeCollateral() reverts if amount to borrow exceeds liquidity of account]
+    function testRevertRemoveCollateral() public {
+        enterPool(10000 * 1e18);
+        vm.startPrank(address(2));
+        pool.borrow(1000 * 1e18);
+        vm.expectRevert(bytes("not enough collateral available!"));
+        pool.removeCollateral(1 * 1e18);
+        vm.stopPrank();
+    }
 
     // test revert can't pay more than owed debt
+    function testRevertRepay() public {
+        enterPool(10000 * 1e18);
+        vm.startPrank(address(2));
+        pool.borrow(1000 * 1e18);
+        vm.expectRevert(bytes("can't repay more than owed debt!"));
+        pool.repay(2000 * 1e18);
+        vm.stopPrank();
+    }
+
+    // test reserves,debt, and exchange rate are increasing
+    function testInterestGain() public {
+        enterPool(10000 * 1e18);
+        vm.startPrank(address(2));
+        pool.borrow(1000 * 1e18);
+        uint256 reserves = pool.getReserves();
+        uint256 debt = pool.getTotalDebt();
+        uint256 exchangeRate = pool.getLendExchangeRate();
+        uint256 debtExchangeRate = pool.getDebtExchangeRate();
+        vm.warp(block.timestamp + 100 days);
+        pool.accrueInterest();
+        require(reserves < pool.getReserves(), "reserves haven't increased!");
+        require(debt < pool.getTotalDebt(), "total debt hasn't increased!");
+        require(
+            exchangeRate < pool.getLendExchangeRate(),
+            "exchange rate hasn't increased!"
+        );
+        require(
+            debtExchangeRate > pool.getDebtExchangeRate(),
+            "debt exchange rate hasn't decreased"
+        );
+    }
+
+    // test fully repaying debt after interest
+    function testRepayDebt() public {
+        enterPool(10000 * 1e18);
+
+        vm.startPrank(address(2));
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.borrow(1000 * 1e18);
+        assertEq(pool.getUserBorrow(address(2)), 1000 * 1e18);
+
+        vm.warp(block.timestamp + 365 days);
+
+        pool.repay(1000 * 1e18);
+        assertEq(pool.getUserBorrow(address(2)), 0);
+        vm.stopPrank();
+    }
+
+    // test yearly interest should be around 12%
+    // have 1 more person borrow and both borrow max dai possible
 
     // test exchange rates after users lend and borrow
 

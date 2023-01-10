@@ -80,7 +80,11 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         uint256 reservesPrior = totalReserve;
 
         // time passed since last function call in seconds
-        uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestamp;
+        if (accrualBlockTimestampPrior >= currentBlockTimestamp) {
+            return;
+        }
+
+        uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestampPrior;
 
         uint256 totalDebtNew;
         uint256 totalReservesNew;
@@ -142,7 +146,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function removeCollateral(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't withdraw 0 eth");
-        require(_amount <= usersCollateral[msg.sender]);
+        require(
+            _amount <= usersCollateral[msg.sender],
+            "not enough collateral available!!"
+        );
         accrueInterest();
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
 
@@ -162,6 +169,7 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function borrow(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't borrow 0 tokens");
+        accrueInterest();
         (uint256 excess, uint256 shortfall) = getLiquidity(msg.sender);
 
         uint underlyingPrice = getUnderlyingPrice();
@@ -186,21 +194,29 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function repay(uint256 _amount) external nonReentrant {
         require(_amount != 0, "can't repay 0 tokens!");
-        uint256 borrowToRepay = _amount.mulDiv(
-            getDebtExchangeRate(),
-            10 ** decimals()
+        accrueInterest();
+
+        uint256 debtToRepay = _amount.mulDiv(
+            10 ** decimals(),
+            getDebtExchangeRate()
         );
         require(
-            borrowToRepay <= usersBorrowed[msg.sender],
+            _amount <= usersBorrowed[msg.sender],
             "can't repay more than owed debt!"
         );
 
         IERC20 token = IERC20(underlying);
-        token.safeTransferFrom(msg.sender, address(this), _amount);
+        token.safeTransferFrom(msg.sender, address(this), debtToRepay);
 
-        usersBorrowed[msg.sender] -= borrowToRepay;
-        totalBorrowed -= borrowToRepay;
-        totalDebt -= _amount;
+        usersBorrowed[msg.sender] -= _amount;
+        totalBorrowed -= _amount;
+
+        // this is needed due to small discrepencies after debt calculations are done
+        if (debtToRepay > totalDebt) {
+            totalDebt = 0;
+        } else {
+            totalDebt -= debtToRepay;
+        }
     }
 
     // return excess and shortfall in usd terms
@@ -253,6 +269,11 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         if (_totalBorrowed == 0) {
             return 10 ** decimals();
         }
+        /*
+        console.log("---------liquidity check---------");
+        console.log(_totalBorrowed);
+        console.log(totalDebt);
+        */
         return _totalBorrowed.mulDiv(10 ** decimals(), totalDebt);
     }
 
@@ -267,6 +288,22 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
     function getUserBorrow(address _account) public view returns (uint256) {
         return usersBorrowed[_account];
+    }
+
+    function getUserDebt(address _account) public view returns (uint256) {
+        return getUserBorrow(_account).mulDiv(1e18, getDebtExchangeRate());
+    }
+
+    function getReserves() public view returns (uint256) {
+        return totalReserve;
+    }
+
+    function getTotalDebt() public view returns (uint256) {
+        return totalDebt;
+    }
+
+    function getTotalDeposits() public view returns (uint256) {
+        return totalDeposited;
     }
 
     function getUtilizationRatio() public view returns (uint256) {

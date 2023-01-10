@@ -76,32 +76,31 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         uint256 currentBlockTimestamp = block.timestamp;
         uint256 accrualBlockTimestampPrior = accrualBlockTimestamp;
 
-        uint256 borrowsPrior = totalBorrowed;
+        uint256 debtPrior = totalDebt;
         uint256 reservesPrior = totalReserve;
 
         // time passed since last function call in seconds
         uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestamp;
 
-        uint256 totalBorrowsNew;
+        uint256 totalDebtNew;
         uint256 totalReservesNew;
         /*
          * Calculate the interest accumulated into borrows and reserves and the new index:
          *  simpleInterestFactor = borrowRate * blockDelta
-         *  interestAccumulated = simpleInterestFactor * totalBorrows
-         *  totalBorrowsNew = interestAccumulated + totalBorrows
+         *  interestAccumulated = simpleInterestFactor * totalDebt
+         *  totalDebtNew = interestAccumulated + totalDebt
          *  totalReservesNew = interestAccumulated * reserveFactor + totalReserves
-         *  borrowIndexNew = simpleInterestFactor * borrowIndex + borrowIndex
          */
         uint256 interestFactor = borrowRate * blockDelta;
 
-        uint256 interestAccumulated = interestFactor.mulDiv(borrowsPrior, 1e18);
+        uint256 interestAccumulated = interestFactor.mulDiv(debtPrior, 1e18);
 
-        totalBorrowsNew = interestAccumulated + borrowsPrior;
+        totalDebtNew = interestAccumulated + debtPrior;
         totalReservesNew =
             (interestAccumulated.mulDiv(reserveFactor, 1e18)) +
             reservesPrior;
 
-        totalBorrowed = totalBorrowsNew;
+        totalDebt = totalDebtNew;
         totalReserve = totalReservesNew;
     }
 
@@ -242,7 +241,7 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         }
 
         return
-            (getCash() + totalBorrowed - totalReserve).mulDiv(
+            (getCash() + totalDebt - totalReserve).mulDiv(
                 10 ** decimals(),
                 totalSupply_
             );
@@ -271,15 +270,15 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
     }
 
     function getUtilizationRatio() public view returns (uint256) {
-        uint256 borrows = totalBorrowed;
-        if (borrows == 0) {
+        uint256 debt = totalDebt;
+        if (debt == 0) {
             return 0;
         }
 
         // scale it to 1e18 no matter the decimals of underlying
         return
-            ((totalBorrowed.mulDiv(10 ** decimals(), totalDeposited)) -
-                totalReserve) * (10 ** (18 - decimals()));
+            ((debt.mulDiv(10 ** decimals(), totalDeposited)) - totalReserve) *
+            (10 ** (18 - decimals()));
     }
 
     // get underlying price scaled to 1e18

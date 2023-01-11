@@ -45,6 +45,7 @@ contract PoolTest is Test {
         daiToken.transferFrom(_holder, address(this), _amount);
         daiToken.transferFrom(_holder, address(1), _amount);
         daiToken.transferFrom(_holder, address(2), _amount);
+        daiToken.transferFrom(_holder, address(3), _amount);
         vm.stopPrank();
     }
 
@@ -195,6 +196,77 @@ contract PoolTest is Test {
         require(daiToken.balanceOf(address(pool)) > 4 * 1e18);
         require(pool.getReserves() > 0);
         require(daiToken.balanceOf(address(1)) > 10000 * 1e18);
+    }
+
+    // test that interest isn't accrued if there are no borrows
+    function testInterestNoBorrows() public {
+        enterPool(10000 * 1e18);
+
+        vm.warp(block.timestamp + 365 days);
+
+        pool.accrueInterest();
+
+        assertEq(pool.getTotalDebt(), 0);
+        assertEq(pool.getUtilizationRatio(), 0);
+        assertEq(pool.getReserves(), 0);
+    }
+
+    // test that only owner can set LTV and reverts on non owner
+    function testSetLTV() public {
+        pool.setLTV(7);
+        assertEq(pool.getLTV(), 7);
+
+        vm.startPrank(address(1));
+        vm.expectRevert();
+        pool.setLTV(1);
+        vm.stopPrank();
+    }
+
+    // test multiple lend and borrows, repay all borrows, then all lenders withdraw
+    function testMultipleLendBorrow() public {
+        enterPool(10000 * 1e18);
+
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.supply(1000 * 10 ** 18);
+
+        vm.startPrank(address(2));
+        pool.borrow(500 * 1e18);
+        vm.stopPrank();
+
+        vm.startPrank(address(3));
+        pool.addCollateral{value: 1 * 10 ** 18}();
+        pool.borrow(500 * 1e18);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 365 days);
+
+        vm.startPrank(address(2));
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.repay(500 * 1e18);
+        vm.stopPrank();
+
+        vm.startPrank(address(3));
+        daiToken.approve(address(pool), type(uint256).max);
+        pool.repay(500 * 1e18);
+        vm.stopPrank();
+
+        vm.startPrank(address(1));
+        pool.redeem(1000 * 1e18);
+        vm.stopPrank();
+
+        pool.redeem(1000 * 1e18);
+
+        require(
+            daiToken.balanceOf(address(1)) > 10000 * 1e18,
+            "balance of 1 should be greater than initial"
+        );
+        require(
+            daiToken.balanceOf(address(this)) > 10000 * 1e18,
+            "balance of this should be greater than initial"
+        );
+        assertEq(pool.getTotalDebt(), 0);
+        assertEq(pool.getTotalDeposits(), 0);
+        assertEq(pool.getTotalBorrows(), 0);
     }
 
     // test interest accrued ( 1 lender 1 borrower) (multiple lenders / borrowers)

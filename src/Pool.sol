@@ -79,6 +79,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         uint256 debtPrior = totalDebt;
         uint256 reservesPrior = totalReserve;
 
+        if (accrualBlockTimestampPrior >= currentBlockTimestamp) {
+            return;
+        }
+
         uint256 blockDelta = currentBlockTimestamp - accrualBlockTimestampPrior;
 
         uint256 totalDebtNew;
@@ -101,24 +105,28 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
 
         totalDebt = totalDebtNew;
         totalReserve = totalReservesNew;
+        accrualBlockTimestamp = currentBlockTimestamp;
     }
 
     function supply(uint256 _amount) external {
         accrueInterest();
-
-        IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
-        totalDeposited += _amount;
 
         uint256 tokensToMint = _amount.mulDiv(
             10 ** decimals(),
             getLendExchangeRate()
         );
 
+        IERC20(underlying).safeTransferFrom(msg.sender, address(this), _amount);
+        totalDeposited += _amount;
+
         _mint(msg.sender, tokensToMint);
     }
 
     function redeem(uint256 _amount) external {
-        require(balanceOf(msg.sender) >= _amount);
+        require(
+            balanceOf(msg.sender) >= _amount,
+            "not enough tokens to redeem!"
+        );
         accrueInterest();
 
         uint256 underlyingToReceive = _amount.mulDiv(
@@ -296,6 +304,10 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         return totalReserve;
     }
 
+    function getTotalBorrows() public view returns (uint256) {
+        return totalBorrowed;
+    }
+
     function getTotalDebt() public view returns (uint256) {
         return totalDebt;
     }
@@ -304,15 +316,20 @@ contract Pool is ERC20Burnable, Ownable, ReentrancyGuard {
         return totalDeposited;
     }
 
+    function getLTV() public view returns (uint256) {
+        return ltv;
+    }
+
     function getUtilizationRatio() public view returns (uint256) {
         uint256 debt = totalDebt;
         if (debt == 0) {
             return 0;
         }
 
+        uint256 totalUnderlying = getCash() + totalBorrowed - totalReserve;
         // scale it to 1e18 no matter the decimals of underlying
         return
-            ((debt.mulDiv(10 ** decimals(), totalDeposited)) - totalReserve) *
+            ((debt.mulDiv(10 ** decimals(), totalUnderlying))) *
             (10 ** (18 - decimals()));
     }
 
